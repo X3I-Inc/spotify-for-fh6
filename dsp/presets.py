@@ -53,12 +53,12 @@ DRIVING_COMPRESSOR_RELEASE_MS = 100.0
 # relax toward flat; at high RPM (louder cabin, more masking) they apply in
 # full. See docs/DECISIONS.md for the reasoning and docs/OPEN_QUESTIONS.md for
 # the tremolo/vibration idea deliberately left out of this pass.
-DRIVING_MUD_GAIN_DB_RELAXED = -0.4  # near-flat at idle -- less masking to fight, no need to cut hard
-DRIVING_MUD_GAIN_DB_FULL = -1.5  # same value as the original static preset, now the redline end of the range
-DRIVING_PRESENCE_GAIN_DB_RELAXED = 0.8  # a light touch at idle
-DRIVING_PRESENCE_GAIN_DB_FULL = 2.5  # same as the original static preset, now the redline end of the range
+DRIVING_MUD_GAIN_DB_RELAXED = 0.0  # flat at idle -- no masking to fight yet
+DRIVING_MUD_GAIN_DB_FULL = -3.0  # deeper cut at redline than the old static value, so the shift reads clearly
+DRIVING_PRESENCE_GAIN_DB_RELAXED = 0.0  # no boost at idle, for maximum contrast against redline
+DRIVING_PRESENCE_GAIN_DB_FULL = 5.0  # stronger cut-through boost at redline, widened from the original static value
 DRIVING_RPM_DUCK_DB_AT_IDLE = 0.0  # no extra ducking at low RPM
-DRIVING_RPM_DUCK_DB_AT_REDLINE = -2.5  # music yields a bit to engine noise under load, within the -2..-3dB ask
+DRIVING_RPM_DUCK_DB_AT_REDLINE = -5.0  # music yields noticeably to engine noise under load -- widened per user ask to make the effect more audible
 
 # --- "paused_or_menu": event-speaker-from-outside-the-car echo ---
 # Modeled on the ITU-T G.101 telephone/radio voiceband (300-3400Hz) -- the

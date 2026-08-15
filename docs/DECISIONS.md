@@ -6,6 +6,108 @@ Running log of technical decisions and their rationale.
   translucent, click-through, always-on-top windows and is faster to style well for
   a polished, game-like overlay look.
 
+- **Overlay content: a Spotify/Apple-Music-style "now playing" card, not a
+  telemetry stats HUD.** Explicit ask: the overlay should be about immersion
+  (album art, track title/artist, progress bar) rather than displaying numbers
+  like speed/RPM/gain. The driving/paused/menu state still shows up, but only
+  as a small accent-color dot and the progress bar's fill color, not text.
+  `overlay/window.py`'s `OverlayWindow` renders the card;
+  `overlay/now_playing.py`'s `NowPlayingPoller` feeds it.
+
+- **Overlay renders in a fixed base coordinate space with one uniform
+  scale.** All layout constants are authored against a 640x340 design space
+  (`BASE_WIDTH`/`BASE_HEIGHT`); `paintEvent` applies a single
+  `painter.scale()` and mouse positions are divided by the same factor before
+  hit-testing. Dragging the bottom-right grip resizes with the aspect ratio
+  locked, so proportions are identical at every size, and size+position are
+  persisted together. Chosen over per-element responsive layout because the
+  panel should look like one fixed piece of hardware at any scale, not reflow.
+
+- **Overlay icons: pre-rendered pixmaps from the Windows system icon font,
+  not `drawText` and not hand-drawn paths.** Icons come from `Segoe Fluent
+  Icons` (falling back to `Segoe MDL2 Assets`). Two bugs forced the current
+  approach, both found by rendering the widget offscreen and looking at it
+  (`scripts/preview_overlay.py`):
+  - Drawing icon-font text under an active `painter.scale()` silently renders
+    *nothing* -- every glyph vanished at any scale other than exactly 1.0,
+    while ordinary text kept rendering fine. Fix: rasterize each glyph once
+    into a cached 4x-supersampled `QPixmap` (`_glyph_pixmap`) and draw that,
+    since pixmaps transform reliably and stay crisp when scaled up.
+  - The glyph constants are Unicode Private Use Area characters, and pasting
+    them literally into the source got them silently stripped to empty
+    strings. They're written as `\u` escapes for that reason -- don't
+    "clean up" the escapes back into literal characters.
+
+- **Overlay never takes focus, so the game doesn't pause on tap.**
+  `Qt.WindowDoesNotAcceptFocus` (Win32 `WS_EX_NOACTIVATE`) plus
+  `WA_ShowWithoutActivating` means clicking the overlay doesn't activate its
+  window and FH6 keeps focus. This only holds if the game runs
+  windowed/borderless -- exclusive fullscreen minimizes on any focus change
+  regardless.
+
+- **In-Car / Regular sound toggle on the overlay, not just automatic
+  telemetry-driven switching.** `DSPChain.set_sound_mode("in_car"|"regular")`
+  (dsp/chain.py) lets the user override whether the "driving" preset's cabin
+  coloration actually applies while driving, or audio stays untouched
+  ("regular"). Deliberately scoped to *only* the driving state: the
+  `paused_or_menu` echo effect always applies regardless of this toggle,
+  since that's tied to actual game state (paused/in a menu), not a listening
+  taste preference the user should be able to override. Rendered as a small
+  pill switch (car / headphones icons) on the Now Playing tab, next to the
+  transport controls -- calls `chain.set_sound_mode()` directly from the GUI
+  thread on tap, safe because that method takes the same lock `process()`
+  uses on the audio thread.
+
+- **Spotify volume shown/changed via the Web API (`/me/player` device
+  volume), controlled by global Page Up/Down, not the Windows per-app
+  mixer.** "Current Spotify volume" means Spotify's own volume (what its
+  slider shows / what Spotify Connect reports), not the OS volume-mixer level
+  for the Spotify process -- those are different things, and only the former
+  is meaningful across Spotify Connect devices. `overlay/hotkeys.py`'s
+  `VolumeHotkeys` uses a plain (non-suppressing) pynput `Listener` for
+  Page Up/Page Down rather than `GlobalHotKeys`, since these are single
+  un-modified keys, not a modifier combo -- and non-suppressing so the
+  keypress still reaches FH6 normally in case it's bound to anything there.
+  UI updates optimistically on keypress (`SpotifyLoader._adjust_volume`
+  emits the new value immediately, before the network call resolves) so it
+  feels responsive; a slow background poll (`VOLUME_POLL_INTERVAL_SECONDS =
+  15`) catches volume changes made elsewhere (phone, Spotify itself) and
+  reconciles any failed set. 15s was chosen deliberately conservative after
+  an earlier version's playlist-refetch-per-tab-open tripped Spotify's
+  extended rate-limit penalty (~24h block, see the per-app-open playlist
+  fetch note above) -- one request per 15s is trivially far under any real
+  limit, there's no reason to poll faster for a value that mostly changes
+  because the user just pressed a key (which already updates optimistically
+  without waiting on a poll).
+  `SpotifyClient.get_volume_percent()` is written directly against
+  `requests` rather than through the shared `_get()` helper, because
+  `/me/player` returns an empty `204` body when there's no active device --
+  a normal, common case here (not an error) -- and `_get()` assumes a JSON
+  body is always present. Indicator only renders on the "now_playing" tab
+  (bottom-right, above the resize grip) since the "home" tab already uses
+  that corner for the search/voice FABs; hidden entirely
+  (`self._volume_percent is None`) until the first successful poll rather
+  than showing a fake starting value.
+
+- **Overlay lock = placement lock, not input lock.** The Ctrl+Alt+L hotkey
+  freezes position/size only; taps on tabs, transport controls and playlist
+  tiles keep working in both states. An earlier version made locking mean
+  click-through (`WA_TransparentForMouseEvents`), which was reverted per
+  explicit feedback -- the overlay is meant to be usable at all times, and
+  locking is only about not nudging it out of place mid-race.
+
+- **Now-playing data source: Windows SMTC (`winsdk`), not the Spotify Web
+  API.** `GlobalSystemMediaTransportControlsSessionManager` reads the same
+  OS-level "now playing" session Spotify already publishes for hardware media
+  keys and the volume-flyout widget — title, artist, album art (as raw
+  image bytes, confirmed working via a real Spotify session), position/
+  duration, and play/pause state, all with zero authentication and works with
+  any player, not just Spotify. Polled every 1s on a background asyncio
+  thread; album art is only re-read (real file I/O) when the track actually
+  changes, not every poll. Rejected the Spotify Web API for this — needs
+  OAuth app registration/token refresh for a feature the OS already exposes
+  for free.
+
 - **Audio capture: WASAPI loopback via `sounddevice`.** Capture is scoped to the
   media player process specifically, so game SFX (engine, tires, environment) stays
   untouched.
@@ -161,6 +263,12 @@ Running log of technical decisions and their rationale.
     modulation is additive to the already-tuned `driving` character rather
     than replacing it — at redline the preset sounds identical to before this
     phase.
+  - **Widened 2026-08-14 per live listening feedback ("make the RPM effect
+    more").** Original ranges (ducking 0→−2.5dB, mud −0.4→−1.5dB, presence
+    0.8→2.5dB) read as too subtle during a live drive. Widened to: ducking
+    0→−5.0dB, mud cut 0→−3.0dB (now flat at idle instead of near-flat),
+    presence boost 0→+5.0dB (now flat at idle instead of a light touch). Not
+    yet re-confirmed by ear at the new values — see docs/OPEN_QUESTIONS.md.
   - **Tremolo/vibration-wobble was deliberately left out of this pass** per
     the task's own risk call-out (easiest of the three to overdo) — tracked
     as a future enhancement in docs/OPEN_QUESTIONS.md, to be evaluated only
@@ -225,7 +333,46 @@ Running log of technical decisions and their rationale.
 
 - **Telemetry format: FH6 Sled-format UDP packet on port 20127.**
 
-- **Telemetry parsing target: Sled + Dash (311 bytes), not bare Sled (232 bytes).**
+- **Real FH6 capture validated (2026-08-14): packet is 324 bytes, not 311 —
+  parser corrected.** Captured raw Data Out packets from the actual FH6 machine
+  (Data Out -> 192.168.1.202:20127) using `scripts/capture_raw_telemetry.py`
+  and `scripts/capture_timed.py`, and found every packet is 324 bytes, not the
+  311 assumed from the FM7-only Sled+Dash layout below. Confirmed against the
+  [official FH6 Data Out documentation](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation)
+  (via a mirrored copy, since the Forza support site blocks direct fetches)
+  and cross-checked empirically against live gameplay (accelerating through
+  gears, braking):
+  - FH6/FH5/FH4 insert a **12-byte "Horizon" block** — `car_group` (i32),
+    `smashable_vel_diff` (f32), `smashable_mass` (f32) — right after the
+    232-byte Sled section and before the Dash tail, which Forza Motorsport's
+    format doesn't have.
+  - The 79-byte Dash tail (position, speed, power, torque, tire temps, lap
+    info, inputs) is otherwise unchanged in content, just shifted 12 bytes
+    later: `speed` moves from offset 244 -> 256, `power` 248 -> 260, etc.
+  - Confirmed empirically: `speed` at the new offset 256 tracked measured
+    forward velocity (`velocity_z`, offset 40) almost exactly through a real
+    acceleration run. `gear` (now at offset 319) stepped 3->4 exactly when RPM
+    redlined and speed climbed through a real upshift; `accel` (now at 315)
+    dropped to 0 exactly on throttle lift. `position_x/y/z` (now 244-255)
+    advanced smoothly frame-to-frame consistent with `speed`. `car_group`
+    stayed constant (13) for the whole session and `smashable_vel_diff`/
+    `smashable_mass` stayed 0 with no collisions — matches the documented
+    field purpose exactly. This matches the official doc's explicit note that
+    input bytes live at offsets 315/316/319 (accel/brake/gear).
+  - There's also a 1-byte trailing field at offset 323 (always 0 in captures
+    so far), added to `FIELD_SPEC` as `_trailing` to keep the struct format
+    aligned to the real 324-byte size, not otherwise used.
+  - `telemetry/parser.py`'s `FIELD_SPEC`/`TelemetryPacket` updated to match;
+    `mock_sender.py` needed no changes since it builds packets dynamically
+    from `FIELD_NAMES`.
+  - Raw capture scripts used for this, kept for future re-validation: `scripts/capture_raw_telemetry.py`
+    (fixed packet count), `scripts/capture_timed.py` (fixed duration),
+    `scripts/diff_raw_telemetry.py` and `scripts/find_gear.py` (offset
+    scanners), `scripts/live_monitor.py` (real-time offset sanity check
+    against the HUD while driving).
+
+- **Telemetry parsing target: Sled + Dash (311 bytes in the original FM7-only
+  assumption; see the 324-byte correction above for what's actually implemented).**
   The base "Sled" struct alone doesn't carry `Speed`/`Power`/`Torque`, which the rest
   of the app depends on — those live in the "Dash" extension that FH6/FH5/Forza
   Motorsport append after the Sled fields. `telemetry/parser.py` implements the

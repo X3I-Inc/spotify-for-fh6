@@ -1,11 +1,11 @@
 """Parses raw Forza Horizon 6 UDP telemetry packets into structured data.
 
-FH6 (like FH5 and Forza Motorsport) broadcasts the "Sled" struct extended with the
-"Dash" fields when Data Out is enabled. The base Sled struct alone (232 bytes) does
-not include Speed/Power/Torque, so this parser targets the full Sled+Dash layout
-(311 bytes), which is what actually carries the fields the rest of this app depends
-on. See docs/DECISIONS.md for the full field/offset table, and
-docs/OPEN_QUESTIONS.md for the note on validating this against a real FH6 capture.
+FH6 broadcasts a 324-byte "Horizon" packet: the same 232-byte Sled struct as
+Forza Motorsport, followed by a 12-byte Horizon-only block (car_group,
+smashable_vel_diff, smashable_mass) not present in FM7, then the same 79-byte
+Dash tail (position/speed/power/torque/tire temps/lap info/inputs) shifted 12
+bytes later, plus a 1-byte trailing field. Confirmed against a real FH6 capture
+and the official Data Out documentation — see docs/DECISIONS.md.
 """
 
 from __future__ import annotations
@@ -84,7 +84,11 @@ FIELD_SPEC: list[tuple[str, str]] = [
     ("car_performance_index", "i"),
     ("drivetrain_type", "i"),
     ("num_cylinders", "i"),
-    # --- Dash extension ---
+    # --- Horizon block (FH6/FH5/FH4 only, not present in FM7's Dash) ---
+    ("car_group", "i"),
+    ("smashable_vel_diff", "f"),
+    ("smashable_mass", "f"),
+    # --- Dash tail ---
     ("position_x", "f"),
     ("position_y", "f"),
     ("position_z", "f"),
@@ -112,12 +116,13 @@ FIELD_SPEC: list[tuple[str, str]] = [
     ("steer", "b"),
     ("normalized_driving_line", "b"),
     ("normalized_ai_brake_difference", "b"),
+    ("_trailing", "B"),
 ]
 
 FIELD_NAMES = tuple(name for name, _ in FIELD_SPEC)
 STRUCT_FORMAT = "<" + "".join(fmt for _, fmt in FIELD_SPEC)
 SLED_DASH_STRUCT = struct.Struct(STRUCT_FORMAT)
-PACKET_SIZE = SLED_DASH_STRUCT.size  # 311 bytes for the Sled+Dash layout
+PACKET_SIZE = SLED_DASH_STRUCT.size  # 324 bytes for FH6's Sled+Horizon+Dash layout
 
 
 class TelemetryParseError(ValueError):
@@ -184,6 +189,9 @@ class TelemetryPacket:
     car_performance_index: int
     drivetrain_type: int
     num_cylinders: int
+    car_group: int
+    smashable_vel_diff: float
+    smashable_mass: float
     position_x: float
     position_y: float
     position_z: float
@@ -211,6 +219,7 @@ class TelemetryPacket:
     steer: int
     normalized_driving_line: int
     normalized_ai_brake_difference: int
+    _trailing: int
 
     @property
     def state(self) -> str:

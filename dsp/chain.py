@@ -96,7 +96,28 @@ class DSPChain:
         self._rpm_norm_target = 0.0
         self._rpm_norm_smoothed = 0.0
 
+        # User-facing override (overlay toggle) for whether "driving" should
+        # actually apply the in-car cabin coloration, or leave audio
+        # untouched (regular/normal sound) even while actively driving.
+        # Doesn't affect "paused_or_menu" -- that echo effect always applies
+        # regardless of this toggle, since it's driven by game state, not a
+        # taste preference.
+        self._sound_mode = "in_car"
+
         self._lock = threading.Lock()
+
+    def set_sound_mode(self, mode: str) -> None:
+        """Switch between "in_car" (apply the driving cabin-acoustics preset)
+        and "regular" (leave audio untouched even while driving).
+
+        Safe to call from a different thread than process() (e.g. the GUI
+        thread reacting to an overlay tap).
+        """
+        if mode not in ("in_car", "regular"):
+            raise ValueError(f"unknown sound mode {mode!r}; expected 'in_car' or 'regular'")
+        with self._lock:
+            self._sound_mode = mode
+        logger.info("DSPChain sound mode -> %r", mode)
 
     def set_state(self, state: str) -> None:
         """Switch to a new preset, crossfading from whatever's currently active.
@@ -127,7 +148,11 @@ class DSPChain:
         Safe to call from a different thread than process() (e.g. the
         telemetry listener thread).
         """
-        self.set_state(state)
+        with self._lock:
+            sound_mode = self._sound_mode
+        effective_state = "neutral" if (state == "driving" and sound_mode == "regular") else state
+
+        self.set_state(effective_state)
         with self._lock:
             self._rpm_norm_target = max(0.0, min(1.0, rpm_norm))
 

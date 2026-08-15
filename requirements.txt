@@ -3,3 +3,5 @@ numpy
 pedalboard
 PySide6
 pynput
+winsdk
+requests
