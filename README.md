@@ -3,6 +3,12 @@
 A non-intrusive, telemetry-driven audio DSP overlay for **Forza Horizon 6** (Windows only). It reads live game telemetry over UDP, dynamically reshapes your background music to sound like it's playing through the car's own radio — muffled highs at low speed, cabin resonance, RPM-reactive ducking — and renders a CarPlay-style Spotify panel on top of the game. No game files are modified, no anti-cheat-risky memory reading involved.
 
 <p align="center">
+  <img src="docs/screenshots/in_game_demo.png" width="860" alt="Overlay running live over Forza Horizon 6" />
+  <br />
+  <em>Running live over real gameplay — telemetry-driven DSP + the overlay, both active.</em>
+</p>
+
+<p align="center">
   <img src="docs/screenshots/now_playing.png" width="420" alt="Now Playing screen" />
   &nbsp;&nbsp;
   <img src="docs/screenshots/home.png" width="420" alt="Playlist browser" />
