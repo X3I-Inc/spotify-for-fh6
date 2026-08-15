@@ -48,8 +48,8 @@ Telemetry is the only writer to the shared state; DSP and the overlay are both r
 
 1. **Clone and install dependencies:**
    ```bash
-   git clone https://github.com/X3I-Inc/audio-bridge.git
-   cd audio-bridge
+   git clone https://github.com/X3I-Inc/spotify-for-fh6.git
+   cd spotify-for-fh6
    pip install -r requirements.txt
    ```
 
